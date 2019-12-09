@@ -1,13 +1,36 @@
-"""Deep Generative Adversarial Network"""
+"""Deep Adversarial Network to mitigate bias
+
+Components
+----------
+    Generator: Tries to predict the target value while tricking the discriminator
+                y_hat = Prob( y=1 | x, s)
+
+    Discriminator: Tries to predict a sensitive attribute based on
+        * the observation (all attributes plus prediction of Generator)
+                s_hat = Prob( s=1 | x , y_hat)
+        * the prediction (without any additional attributes)
+                s_hat = Prob( s=1 | y_hat)
+Loss-Function
+-------------
+    We use the binary-cross-entropy for both the discriminator and generator network
+    for the optimazation.
+
+"""
 
 import tensorflow as tf
 from tensorflow.keras import layers
-from fairml.models.utils import save_model
+from fairml.models.utils import (
+    save_model,
+    save_fairness_metrics,
+    prepare_model_input,
+    prepare_generator_input,
+    prepare_discriminator_input,
+)
 import time
 import numpy as np
 
 
-class FairGAN:
+class FairAN:
     def __init__(
         self,
         generator_optimizer,
@@ -16,6 +39,8 @@ class FairGAN:
         target_variable,
         checkpoint_dir,
         fairness_multiplier,
+        save_fairness_in,
+        disc_observation_based,
     ):
         tf.keras.backend.set_floatx("float64")
         self.generator_optimizer = generator_optimizer
@@ -25,11 +50,13 @@ class FairGAN:
         self.checkpoint_dir = checkpoint_dir
         self.fairness_multiplier = fairness_multiplier
         self.cross_entropy = tf.keras.losses.BinaryCrossentropy(from_logits=True)
+        self.save_fairness_in = save_fairness_in
+        self.disc_observation_based = disc_observation_based
 
     def make_generator(
         self, num_neurons: int, num_layers: int, input_shape: (int, None)
     ):
-        """Create a really simple dense NN"""
+        """Create Generator Network"""
 
         model = tf.keras.Sequential()
         model.add(
@@ -61,7 +88,7 @@ class FairGAN:
         input_shape: (int, None),
         num_sensitive_groups: int,
     ):
-        """Create an easy discriminator"""
+        """Create Discriminator Network"""
         model = tf.keras.Sequential()
 
         model.add(
@@ -108,35 +135,26 @@ class FairGAN:
         return precision_loss - self.fairness_multiplier * no_clue_loss
 
     def train_step(self, observation):
-        true_sensitive_values = observation[
-            self.sensitive_variables
-        ].values  # Array (S,1)
-        true_target_value = observation[self.target_variable].values  # Value (1)
-        feature_cols = [
-            col
-            for col in observation.columns
-            if (col != self.target_variable) & (col not in self.sensitive_variables)
-        ]
-        feature_vector = observation[feature_cols].values
+        feature_vector, true_sensitive_values, true_target_value = prepare_model_input(
+            self, observation
+        )
 
         # Watch Gradients for this context
         with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
 
             # Calculate target Y with Generator
-            generator_input = np.concatenate(
-                (feature_vector, true_sensitive_values), axis=1
+            generator_input = prepare_generator_input(
+                feature_vector, true_sensitive_values
             )
-            generator_input = np.asmatrix(generator_input)
             pred_target_value = self.generator(generator_input, training=True)
 
             # Calculate senstive values S with Discriminator
-            pred_target_value = tf.reshape(
-                pred_target_value, (len(true_target_value), 1)
+            discriminator_input = prepare_discriminator_input(
+                feature_vector,
+                pred_target_value,
+                true_target_value,
+                self.disc_observation_based,
             )
-            discriminator_input = np.concatenate(
-                (feature_vector, pred_target_value), axis=1
-            )
-            discriminator_input = np.asmatrix(discriminator_input)
             pred_sensitive_value = self.discriminator(
                 discriminator_input, training=True
             )
@@ -188,6 +206,14 @@ class FairGAN:
         gen_loss_in_epoch = []
         disc_loss_in_epoch = []
 
+        fairness_series = {
+            "Epoch": [],
+            "GroupFairness": [],
+            "PredictiveParity": [],
+            "TPR_EqOdds": [],
+            "FPR_EqOdds": [],
+        }
+
         for epoch in range(epochs):
             print("-------------------------------------------")
             print(f"Beginning of Epoch: {epoch+1}\n")
@@ -209,11 +235,16 @@ class FairGAN:
             if (epoch + 1) % 100 == 0:
                 save_model(self, np.mean(gen_loss_in_epoch))
 
+            # Save fairness metrics every few epochs
+            if epoch in self.save_fairness_in:
+                fairness_series = save_fairness_metrics(
+                    self, dataset.copy(), fairness_series, epoch
+                )
+
             print(f"Time for epoch {epoch + 1} is {time.time()-start} sec\n")
 
-        return gen_loss_series, disc_loss_series
+        return gen_loss_series, disc_loss_series, fairness_series
 
     def generate_prediction(self, validation_df):
         validation_df = np.asmatrix(validation_df)
-        predictions = self.generator(validation_df, training=False).numpy()
-        return predictions
+        return self.generator(validation_df, training=False).numpy()
