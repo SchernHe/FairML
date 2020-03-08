@@ -69,3 +69,27 @@ def save_fairness_metrics(model, dataset, fairness_series, epoch):
             fairness_series.get(key).append(FairAN_Fairness.loc["Gap", key])
 
     return fairness_series
+
+
+def init_placeholders():
+    gen_loss_series = []
+    disc_loss_series = []
+
+    gen_loss_in_epoch = []
+    disc_loss_in_epoch = []
+
+    fairness_series = {
+        "Epoch": [],
+        "GroupFairness": [],
+        "PredictiveParity": [],
+        "TPR_EqOdds": [],
+        "FPR_EqOdds": [],
+    }
+
+    return (
+        gen_loss_series,
+        disc_loss_series,
+        gen_loss_in_epoch,
+        disc_loss_in_epoch,
+        fairness_series,
+    )

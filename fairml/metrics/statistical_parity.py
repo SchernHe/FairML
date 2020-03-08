@@ -2,11 +2,11 @@
 import pandas as pd
 
 
-def calculate_group_fairness(
+def calculate_statistical_parity(
     df, prediction_variable, protected_variable_list, is_binary=True
 ):
     """
-    Calculate the group fairness metric for a given dataframe sensitive attribute
+    Calculate statistical parity for a given dataframe sensitive attribute
 
     Parameters
     ----------
@@ -20,11 +20,11 @@ def calculate_group_fairness(
 
     Returns
     -------
-    group_fairness : pd.DataFrame
+    statistical_parity : pd.DataFrame
     """
 
-    group_fairness = pd.DataFrame(
-        columns=["GroupFairness"], index=protected_variable_list + ["Gap"]
+    statistical_parity = pd.DataFrame(
+        columns=["Acceptance_Rate"], index=protected_variable_list + ["Gap"]
     )
 
     if not is_binary:
@@ -38,13 +38,13 @@ def calculate_group_fairness(
             num_of_positive_classification = len(
                 df_prot_subset.loc[df_prot_subset[prediction_variable] == 1]
             )
-            group_fairness.loc[protected_variable] = (
+            statistical_parity.loc[protected_variable] = (
                 num_of_positive_classification / num_of_instances
             ) * 100
 
-        group_fairness.loc["Gap", "GroupFairness"] = (
-            group_fairness["GroupFairness"].max()
-            - group_fairness["GroupFairness"].min()
+        statistical_parity.loc["Gap", "Acceptance_Rate"] = (
+            statistical_parity["Acceptance_Rate"].max()
+            - statistical_parity["Acceptance_Rate"].min()
         )
 
-        return group_fairness
+        return statistical_parity

@@ -1,5 +1,5 @@
 import fairml.metrics.equalized_odds as equalized_odds
-import fairml.metrics.group_fairness as group_fairness
+import fairml.metrics.statistical_parity as statistical_parity
 import fairml.metrics.predictive_parity as predictive_parity
 
 
@@ -24,17 +24,17 @@ def calculate_fairness_metrics(
     fairness_metrics: pd.DataFrame
     """
 
-    gf_metrics = group_fairness.calculate_group_fairness(
+    sta_parity = statistical_parity.calculate_statistical_parity(
         df, prediction_variable, protected_variable_list
     )
-    pp_metrics = predictive_parity.calculate_predictive_parity(
+    pre_parity = predictive_parity.calculate_predictive_parity(
         df, target_variable, prediction_variable, protected_variable_list
     )
-    eo_metrics = equalized_odds.calculate_equalized_odds(
+    eq_odds = equalized_odds.calculate_equalized_odds(
         df, target_variable, prediction_variable, protected_variable_list
     )
 
-    fairness_metrics = gf_metrics.merge(
-        pp_metrics, left_index=True, right_index=True
-    ).merge(eo_metrics, left_index=True, right_index=True)
+    fairness_metrics = sta_parity.merge(
+        pre_parity, left_index=True, right_index=True
+    ).merge(eq_odds, left_index=True, right_index=True)
     return fairness_metrics

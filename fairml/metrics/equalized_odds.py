@@ -27,7 +27,7 @@ def calculate_equalized_odds(
     """
 
     equalized_odds = pd.DataFrame(
-        columns=["TPR_EqOdds", "FPR_EqOdds"], index=protected_variable_list + ["Gap"]
+        columns=["TPR", "FPR"], index=protected_variable_list + ["Gap"]
     )
 
     if not is_binary:
@@ -37,17 +37,17 @@ def calculate_equalized_odds(
 
         for protected_variable in protected_variable_list:
             df_prot_subset = df.loc[(df[protected_variable] == 1)]
-            equalized_odds.loc[protected_variable, "TPR_EqOdds"] = calculate_recall(
+            equalized_odds.loc[protected_variable, "TPR"] = calculate_recall(
                 df_prot_subset, target_variable, prediction_variable
             )
-            equalized_odds.loc[protected_variable, "FPR_EqOdds"] = calculate_fpr(
+            equalized_odds.loc[protected_variable, "FPR"] = calculate_fpr(
                 df_prot_subset, target_variable, prediction_variable
             )
-        equalized_odds.loc["Gap", "TPR_EqOdds"] = (
-            equalized_odds["TPR_EqOdds"].max() - equalized_odds["TPR_EqOdds"].min()
+        equalized_odds.loc["Gap", "TPR"] = (
+            equalized_odds["TPR"].max() - equalized_odds["TPR"].min()
         )
-        equalized_odds.loc["Gap", "FPR_EqOdds"] = (
-            equalized_odds["FPR_EqOdds"].max() - equalized_odds["FPR_EqOdds"].min()
+        equalized_odds.loc["Gap", "FPR"] = (
+            equalized_odds["FPR"].max() - equalized_odds["FPR"].min()
         )
 
         return equalized_odds

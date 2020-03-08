@@ -25,6 +25,7 @@ from fairml.models.utils import (
     prepare_model_input,
     prepare_generator_input,
     prepare_discriminator_input,
+    init_placeholders,
 )
 import time
 import numpy as np
@@ -200,19 +201,13 @@ class FairAN:
     def train(self, dataset, epochs, batch_size):
         print(f"Start Training - Total of {epochs} Epochs:\n")
 
-        gen_loss_series = []
-        disc_loss_series = []
-
-        gen_loss_in_epoch = []
-        disc_loss_in_epoch = []
-
-        fairness_series = {
-            "Epoch": [],
-            "GroupFairness": [],
-            "PredictiveParity": [],
-            "TPR_EqOdds": [],
-            "FPR_EqOdds": [],
-        }
+        (
+            gen_loss_series,
+            disc_loss_series,
+            gen_loss_in_epoch,
+            disc_loss_in_epoch,
+            fairness_series,
+        ) = init_placeholders()
 
         for epoch in range(epochs):
             print("-------------------------------------------")

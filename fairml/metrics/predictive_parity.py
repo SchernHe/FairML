@@ -27,7 +27,7 @@ def calculate_predictive_parity(
     """
 
     predictive_parity = pd.DataFrame(
-        columns=["PredictiveParity"], index=protected_variable_list + ["Gap"]
+        columns=["Precision"], index=protected_variable_list + ["Gap"]
     )
 
     if not is_binary:
@@ -36,14 +36,14 @@ def calculate_predictive_parity(
     else:
 
         for protected_variable in protected_variable_list:
+
             df_prot_subset = df.loc[(df[protected_variable] == 1)]
             predictive_parity.loc[protected_variable] = calculate_precision(
                 df_prot_subset, target_variable, prediction_variable
             )
 
-        predictive_parity.loc["Gap", "PredictiveParity"] = (
-            predictive_parity["PredictiveParity"].max()
-            - predictive_parity["PredictiveParity"].min()
+        predictive_parity.loc["Gap", "Precision"] = (
+            predictive_parity["Precision"].max() - predictive_parity["Precision"].min()
         )
 
         return predictive_parity
