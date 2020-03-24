@@ -8,36 +8,10 @@ import numpy as np
 from fairml.metrics.consistency import calculate_consistency, fit_nearest_neighbors
 
 
-def _create_batches(dataset, batch_size):
-    """Helper Function to create batches. Each batch is a list of two samples"""
-
-    idx = (len(dataset) // batch_size) * batch_size
-    dataset = dataset.values
-    np.random.shuffle(dataset)
-    subset = dataset[0:idx, :]
-
-    num_of_batches = len(dataset) // batch_size
-
-    batches = [
-        _retrieve_samples(batch, batch_size)
-        for batch in np.array_split(subset, num_of_batches)
-    ]
-
-    return batches
-
-
-def _retrieve_samples(batch, batch_size):
-    """Helper function to create samples from each batch"""
-    sample_size = int(batch_size / 2)
-    sample_1 = batch[0:sample_size, :]
-    sample_2 = batch[sample_size:, :]
-    return (sample_1, sample_2)
-
-
-def generate_prediction(model, validation_df):
+def generate_prediction(model, df):
     """Helper function to generate predictions, given a model and a dataframe"""
-    validation_df = np.asmatrix(validation_df)
-    return model.generator(validation_df, training=False).numpy()
+    df = np.asmatrix(df)
+    return model(df, training=False).numpy()
 
 
 class Individual_FairWAN:
@@ -45,10 +19,6 @@ class Individual_FairWAN:
         self,
         G_optimizer,
         C_optimizer,
-        x_idx,
-        s_idx,
-        y_idx,
-        i_idx,
         mode_critic,
         mode_generator,
     ):
@@ -262,6 +232,7 @@ class Individual_FairWAN:
     def train(
         self,
         dataset,
+        sampler,
         epochs_total,
         epochs_critic,
         batch_size,
@@ -274,6 +245,7 @@ class Individual_FairWAN:
         Parameters
         ----------
         dataset : pd.DataFrame
+        sampler : fairml.models.Sampler
         epochs_total : int
         epochs_critic : int
         batch_size : int
@@ -297,6 +269,7 @@ class Individual_FairWAN:
 
         neigh = fit_nearest_neighbors(dataset[informative_variables], num_knn)
 
+
         for epoch in range(epochs_total):
             start = time.time()
 
@@ -305,15 +278,12 @@ class Individual_FairWAN:
 
             for _ in range(epochs_critic):
                 # Train only Critic
-                for sample in _create_batches(dataset, batch_size):
-                    G_input, C_input_real, Y, X = self._prepare_inputs(sample)
+                for G_input, C_input_real, Y, X in sampler.create_batches(dataset, batch_size):   
                     self.train_step(
                         G_input, C_input_real, Y, X, batch_size, False, True
                     )
 
-            for sample in _create_batches(dataset, batch_size):
-                # Train Generator and Critic
-                G_input, C_input_real, Y, X = self._prepare_inputs(sample)
+            for G_input, C_input_real, Y, X in sampler.create_batches(dataset, batch_size):                
                 sample_loss_in_epoch = (1 / batch_size) * np.array(
                     [
                         loss.numpy()
@@ -344,34 +314,7 @@ class Individual_FairWAN:
 
         return G_loss_in_epoch_series, C_loss_in_epoch_series, Consistency_score_series
 
-    def _prepare_inputs(self, samples):
-        """Helper Function: Prepare input vectors for model
 
-        Parameters
-        ----------
-        samples : np.matrix
-
-        Returns
-        -------
-        G_input: np.matrix
-            Generator Input of size (Batch, Columns)
-        C_input_real: np.matrix
-            Critic Input Sample Two of size (Batch, Columns)
-        Y: np.matrix
-            True Y values of Sample One (Batch, 1)
-        X: np.matrix
-            X Values of Sample One (Batch, Columns)
-        """
-
-        G_input = samples[0][:, self.x_idx + self.s_idx]
-
-        C_input_real = tf.concat(
-            (samples[1][:, self.i_idx], samples[1][:, self.y_idx]), axis=1
-        )
-        Y = samples[0][:, self.y_idx]
-        X = samples[0][:, self.i_idx]
-
-        return G_input, C_input_real, Y, X
 
     @tf.function
     def _add_gradient_penalty(self, C_input_real, C_input_fake, batch_size):
@@ -418,7 +361,7 @@ class Individual_FairWAN:
 
         print(f"---- Calculate Consitency Value!")
 
-        df["Y_SCORE"] = generate_prediction(self, df.values[:, self.x_idx + self.s_idx])
+        df["Y_SCORE"] = generate_prediction(self.generator, df.values[:, self.x_idx + self.s_idx])
         df["Y"] = df["Y_SCORE"].apply(lambda row: 1 if row > 0.5 else 0)
 
         consistency_in_epoch = calculate_consistency(
