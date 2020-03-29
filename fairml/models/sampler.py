@@ -20,7 +20,7 @@ class Sampler():
 		self.i_idx = i_idx
 
 
-	def create_batches(self, dataset, batch_size):
+	def __call__(self, dataset, batch_size):
 		"""Helper Function to create batches. Each batch is a list of two samples"""
 
 		idx = (len(dataset) // batch_size) * batch_size
@@ -31,8 +31,8 @@ class Sampler():
 		num_of_batches = len(dataset) // batch_size
 
 		batches = [
-		self.prepare_inputs(
-			samples=self.retrieve_samples(batch, batch_size)
+		self._prepare_inputs(
+			samples=self._retrieve_samples(batch, batch_size)
 			)
 		for batch in np.array_split(subset, num_of_batches)
 		]
@@ -40,7 +40,7 @@ class Sampler():
 		return batches
 
 
-	def retrieve_samples(self, batch, batch_size):
+	def _retrieve_samples(self, batch, batch_size):
 	    """Helper function to create samples from each batch"""
 	    sample_size = int(batch_size / 2)
 	    sample_1 = batch[0:sample_size, :]
@@ -48,7 +48,7 @@ class Sampler():
 	    return (sample_1, sample_2)
 
 
-	def prepare_inputs(self, samples):
+	def _prepare_inputs(self, samples):
 		"""Helper Function: Prepare input vectors for model
 
 		Parameters

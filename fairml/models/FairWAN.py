@@ -25,13 +25,10 @@ class Individual_FairWAN:
         tf.keras.backend.set_floatx("float64")
         self.G_optimizer = G_optimizer
         self.C_optimizer = C_optimizer
-        self.x_idx = x_idx
-        self.s_idx = s_idx
-        self.y_idx = y_idx
-        self.i_idx = i_idx
         self.cross_entropy = tf.keras.losses.BinaryCrossentropy(from_logits=True)
         self.mode_critic = mode_critic
         self.mode_generator = mode_generator
+
 
     def make_generator(self, num_neurons: int, input_shape: (int, None)):
         """Create Generator Network
@@ -57,11 +54,16 @@ class Individual_FairWAN:
 
         generator.add(
             layers.Dense(
-                int(num_neurons), kernel_initializer="glorot_normal", activation="relu",
+                num_neurons, kernel_initializer="glorot_normal", activation="relu",
             )
         )
 
-        # Predict the target variable Y in % [0,100]
+        generator.add(
+            layers.Dense(
+                num_neurons//2, kernel_initializer="glorot_normal", activation="relu",
+            )
+        )
+
         generator.add(layers.Dense(1, activation="sigmoid"))
         self.generator = generator
 
@@ -90,7 +92,17 @@ class Individual_FairWAN:
 
         critic.add(
             layers.Dense(
-                num_neurons,
+                num_neurons//2,
+                input_shape=input_shape,
+                kernel_initializer="glorot_normal",
+                activation="relu",
+            )
+        )
+
+
+        critic.add(
+            layers.Dense(
+                num_neurons//2,
                 input_shape=input_shape,
                 kernel_initializer="glorot_normal",
                 activation="relu",
@@ -100,7 +112,7 @@ class Individual_FairWAN:
         critic.add(layers.Dense(1))
         self.critic = critic
 
-    @tf.function
+    @tf.function 
     def calculate_critic_loss(self, C_real, C_fake):
         """Calculate critic  loss
 
@@ -115,20 +127,21 @@ class Individual_FairWAN:
         -------
         critic_loss
         """
-
         w_distance = tf.reduce_mean(C_fake) - tf.reduce_mean(C_real)
-        l2_penalty = self.mode_critic.get("l2_penalty") * tf.add_n(
+        lambda_l2 = tf.constant(self.mode_critic.get("l2_penalty",0.),dtype=tf.float64)
+
+        l2_penalty = lambda_l2 * tf.add_n(
             [
                 tf.nn.l2_loss(v)
                 for v in self.critic.trainable_variables
                 if "bias" not in v.name
             ]
         )
-
-        return w_distance + l2_penalty
+        critic_loss = tf.math.add(w_distance,l2_penalty)
+        return critic_loss
 
     @tf.function
-    def calculate_generator_loss(self, C_fake, Y_HAT, Y, batch_size):
+    def calculate_generator_loss(self, C_fake, Y_HAT, Y):
         """Calculate generator loss
 
         Parameters
@@ -139,15 +152,17 @@ class Individual_FairWAN:
             Generator predictions of samle one
         Y : tf.tensor
             True y values of sample one
-        batch_size : int
 
         Returns
         -------
         generator_loss : tf.float64
         """
+        lambda_wasserstein = tf.constant(self.mode_generator.get("lambda",1.),dtype=tf.float64)
 
         w_distance = -tf.reduce_mean(C_fake)
-        l2_penalty = self.mode_generator.get("l2_penalty") * tf.add_n(
+
+        lambda_l2 = tf.constant(self.mode_generator.get("l2_penalty",0.),dtype=tf.float64)
+        l2_penalty = tf.add_n(
             [
                 tf.nn.l2_loss(v)
                 for v in self.generator.trainable_variables
@@ -155,24 +170,24 @@ class Individual_FairWAN:
             ]
         )
 
+        generator_loss = lambda_wasserstein * w_distance + lambda_l2*l2_penalty
+
         # Activate Cross-Entropy with Lambda Parameter
         if self.mode_generator.get("lambda"):
-            generator_loss = self.cross_entropy(Y, Y_HAT) + self.mode_generator.get("lambda") * w_distance + l2_penalty
-        
-        generator_loss = w_distance + l2_penalty
+            generator_loss += self.cross_entropy(Y, Y_HAT) 
+            
 
-        return generator_loss
+        return generator_loss 
 
-    @tf.function
+    @tf.function(experimental_relax_shapes=True)
     def train_step(
         self,
         G_input,
         C_input_real,
-        Y,
-        X,
-        batch_size,
-        train_generator=False,
-        train_critic=True,
+        Y_target,
+        Mean_C_input_real,
+        train_generator,
+        train_critic,
     ):
         """Summary
 
@@ -180,11 +195,8 @@ class Individual_FairWAN:
         ----------
         G_input : np.matrix
         C_input_real : np.matrix
-        Y : np.matrix
+        Y_target : np.matrix
             Y Values of Sample One
-        X : np.matrix
-            X Values of Sample One
-        batch_size : int
         train_generator : bool, optional
             Flag whether to train generator
         train_critic : bool, optional
@@ -195,24 +207,22 @@ class Individual_FairWAN:
         List
             Calculated Generator and Critic Loss
         """
-
         with tf.GradientTape() as G_tape, tf.GradientTape() as C_tape:
 
             G_output = self.generator(G_input, training=train_generator)
-
-            C_input_fake = tf.concat([X, G_output], axis=1)
-
+            C_input_fake = G_output
             # Calculate C(X) and C(G(x))
             C_fake = self.critic(C_input_fake, training=train_critic)
             C_real = self.critic(C_input_real, training=train_critic)
 
             # Calculate Generator and Critic loss_in_epoch
             C_loss = self.calculate_critic_loss(C_real, C_fake)
-            G_loss = self.calculate_generator_loss(C_fake, G_output, Y, batch_size)
+            G_loss = self.calculate_generator_loss(C_fake=C_fake, Y_HAT=G_output, Y=Y_target)
 
-            C_loss += 0.001 * self._add_gradient_penalty(
-                C_input_real, C_input_fake, batch_size
+            gradient_penalty = 0.01 * add_gradient_penalty(
+                self.critic, Mean_C_input_real, C_input_fake
             )
+            C_loss += gradient_penalty
 
             # Train Generator
             G_gradients = G_tape.gradient(G_loss, self.generator.trainable_variables)
@@ -226,12 +236,16 @@ class Individual_FairWAN:
             self.C_optimizer.apply_gradients(
                 zip(C_gradients, self.critic.trainable_variables)
             )
-
+            
+            #clip_D = [p.assign(tf.clip_by_value(p, -0.01, 0.01)) for p in self.critic.trainable_variables]
+            
             return [G_loss, C_loss]
+
 
     def train(
         self,
         dataset,
+        sampled_batches,
         sampler,
         epochs_total,
         epochs_critic,
@@ -258,7 +272,7 @@ class Individual_FairWAN:
 
         """
         print(f"Start Training - Total of {epochs_total} Epochs:\n")
-
+        print(f"Got total number of {len(sampled_batches)} batches!")
         # Initialize Placeholder
         loss_in_epoch = np.array([0.0, 0.0])
         G_loss_in_epoch_series, C_loss_in_epoch_series, Consistency_score_series = (
@@ -266,29 +280,39 @@ class Individual_FairWAN:
             [],
             [],
         )
-
-        neigh = fit_nearest_neighbors(dataset[informative_variables], num_knn)
-
+        sample_count=0
+        #neigh = fit_nearest_neighbors(dataset[informative_variables], num_knn)
 
         for epoch in range(epochs_total):
             start = time.time()
-
             print("-------------------------------------------")
             print(f"Beginning of Epoch: {epoch+1}\n")
 
+            # Take new list of batches
+   
+            batches = sampled_batches[sample_count]
+            sample_count +=1
+            if sample_count ==len(sampled_batches):
+                sample_count = 0
+
+        
             for _ in range(epochs_critic):
                 # Train only Critic
-                for G_input, C_input_real, Y, X in sampler.create_batches(dataset, batch_size):   
+                for batch in batches:
+                    G_input, C_input_real, Y_target, Mean_C_input_real = sampler._prepare_inputs(dataset,batch)
+                    
                     self.train_step(
-                        G_input, C_input_real, Y, X, batch_size, False, True
+                        G_input, C_input_real, Y_target, Mean_C_input_real, tf.constant(False), tf.constant(True)
                     )
 
-            for G_input, C_input_real, Y, X in sampler.create_batches(dataset, batch_size):                
+
+            for batch in batches:
+                G_input, C_input_real, Y_target, Mean_C_input_real = sampler._prepare_inputs(dataset,batch)
                 sample_loss_in_epoch = (1 / batch_size) * np.array(
                     [
                         loss.numpy()
                         for loss in self.train_step(
-                            G_input, C_input_real, Y, X, batch_size, True, True
+                            G_input, C_input_real, Y_target, Mean_C_input_real, tf.constant(True), tf.constant(True)
                         )
                     ]
                 )
@@ -314,35 +338,6 @@ class Individual_FairWAN:
 
         return G_loss_in_epoch_series, C_loss_in_epoch_series, Consistency_score_series
 
-
-
-    @tf.function
-    def _add_gradient_penalty(self, C_input_real, C_input_fake, batch_size):
-        """Helper Function: Add gradient penalty to enforce Lipschitz continuity
-
-        Parameters
-        ----------
-        C_input_real : np.matrix
-            Critic Input Real (Sample Two)
-        C_input_fake : tf.Tensor
-            Critic Input Fake (Sample 2 X with generator predictions)
-        batch_size : int
-
-        Returns
-        -------
-        tf.tensor of type tf.float64
-            Gradient penalty term
-        """
-        alpha = tf.random.uniform(
-            shape=[int(batch_size / 2), 1], minval=0.0, maxval=1.0, dtype=tf.float64
-        )
-
-        interpolates = alpha * C_input_real + ((1 - alpha) * C_input_fake)
-        disc_interpolates = self.critic(interpolates)
-        gradients = tf.gradients(disc_interpolates, [interpolates])[0]
-        slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients)))
-        gradient_penalty = tf.reduce_mean((slopes - 1) ** 2)
-        return gradient_penalty
 
     def _save_consistency_score(
         self, df, Consistency_score_series, informative_variables, neigh
@@ -372,3 +367,34 @@ class Individual_FairWAN:
         print(f"---- Consitency Score: {consistency_in_epoch}")
 
         return Consistency_score_series
+
+
+@tf.function
+def add_gradient_penalty(critic, Mean_C_input_real, C_input_fake):
+    """Helper Function: Add gradient penalty to enforce Lipschitz continuity
+
+    Parameters
+    ----------
+    C_input_real : np.matrix
+        Critic Input Real (Sample Two)
+    C_input_fake : tf.Tensor
+        Critic Input Fake (Sample 2 X with generator predictions)
+
+    Returns
+    -------
+    tf.tensor of type tf.float64
+        Gradient penalty term
+    """
+    alpha = tf.random.uniform(
+        shape=[int(C_input_fake.shape[1]), 1], minval=0.0, maxval=1.0, dtype=tf.float64
+    )
+    differences = Mean_C_input_real - C_input_fake
+    interpolates = Mean_C_input_real + alpha * differences
+    disc_interpolates = critic(interpolates)
+    gradients = tf.gradients(disc_interpolates, [interpolates])[0]
+   
+    slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients)))
+    
+    gradient_penalty = tf.reduce_mean((slopes - 1) ** 2)
+    
+    return gradient_penalty
