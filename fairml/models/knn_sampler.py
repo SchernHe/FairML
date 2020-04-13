@@ -4,12 +4,13 @@ from fairml.metrics.consistency import fit_nearest_neighbors
 
 class KNNEngine():
 	""" K-Neirest-Neighbors Engine"""
-	def __init__(self, dataset, k):
+	def __init__(self, dataset, k,radius):
 		self.dataset = dataset
 		self.neigh = fit_nearest_neighbors(dataset,k)
+		self.radius = radius
 
 	def __call__(self, observations):
-		neigh_dist, neigh_idx = self.neigh.kneighbors(observations)
+		neigh_dist, neigh_idx = self.neigh.radius_neighbors(observations,self.radius)
 		return neigh_idx
 
 
@@ -44,10 +45,11 @@ class KNNSampler():
 	    pca_idx,
 	    k,
 	    random,
+	    radius,
 	):
 		tf.keras.backend.set_floatx("float64")
 		self.dataset = dataset.values
-		self.KNNEngine = KNNEngine(self.dataset[:,pca_idx],k)
+		self.KNNEngine = KNNEngine(self.dataset[:,pca_idx],k,radius)
 		self.x_idx = x_idx
 		self.s_idx = s_idx
 		self.y_idx = y_idx
@@ -77,28 +79,26 @@ class KNNSampler():
 
 		num_batches = len(idx_choice)//batch_size
 
-		KNN_IDX = []
 		batch_indizes = []
 		
 		for _ in range(0,num_batches):
+			KNN_IDX = []
+			GP_IDX = []
 			observation_idx_knn = idx_choice[(_*batch_size):(_*batch_size+batch_size)]
 			slice_dataset  = self.dataset[observation_idx_knn,:]
 			
 			# (batch_size,k=20)
 			neigh_idx = self.KNNEngine(slice_dataset[:,self.pca_idx])
-			
 			for _ , idx in enumerate(neigh_idx):
-				intersect_idx = np.intersect1d(idx,resulting_idx)
-				if len(intersect_idx)>0:
-					neigh_idx = np.random.choice(intersect_idx,self.random)
-					resulting_idx = np.delete(resulting_idx,neigh_idx)
-				else:
-					neigh_idx = np.random.choice(neigh_idx,self.random)
-					print("Needs to take some double")
-				
-				KNN_IDX = np.concatenate([KNN_IDX,neigh_idx])
-			
-			batch_indizes += [ (observation_idx_knn , KNN_IDX) ]
+				if len(idx)==0:
+					print("No Neighbors Found") 
+				GP_IDX.extend([idx[-1]])
+				if len(idx) > self.random:
+					idx = np.random.choice(idx,self.random)
+				KNN_IDX.extend(idx)
+
+			KNN_IDX = np.array(KNN_IDX)
+			batch_indizes += [ (observation_idx_knn , KNN_IDX, GP_IDX) ]
 
 		return batch_indizes
 
@@ -133,15 +133,9 @@ class KNNSampler():
 		G_input = dataset.iloc[batch_idx[0],self.x_idx + self.s_idx].values
 		C_input_real = dataset.iloc[batch_idx[1], self.y_idx].values
 		Y_target = dataset.iloc[batch_idx[0], self.y_idx].values
-		Mean_C_input_real = []
+		Mean_C_input_real = dataset.iloc[batch_idx[2], self.y_idx].values
 
-		for i in range(0,len(batch_idx[0])):
-		    from_idx = self.random * i
-		    to_idx = self.random * i + self.random
-		    subset = C_input_real[from_idx: to_idx]
-		    Mean_C_input_real += [[ subset.mean() ]]
-
-
+		
 		G_input = tf.convert_to_tensor(G_input,dtype=tf.float64)
 		C_input_real = tf.convert_to_tensor(C_input_real,dtype=tf.float64)
 		Y_target = tf.convert_to_tensor(Y_target,dtype=tf.float64)

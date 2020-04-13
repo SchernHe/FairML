@@ -369,7 +369,7 @@ class Individual_FairWAN:
         return Consistency_score_series
 
 
-@tf.function
+@tf.function(experimental_relax_shapes=True)
 def add_gradient_penalty(critic, Mean_C_input_real, C_input_fake):
     """Helper Function: Add gradient penalty to enforce Lipschitz continuity
 
