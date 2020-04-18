@@ -5,24 +5,13 @@ import tensorflow as tf
 from tensorflow.keras import layers
 import time
 import numpy as np
-from fairml.metrics.consistency import calculate_consistency
-
-
-def generate_prediction(model, df):
-    """Helper function to generate predictions, given a model and a dataframe"""
-    df = np.asmatrix(df)
-    return model(df, training=False).numpy()
 
 
 class Individual_FairWAN:
-    def __init__(
-        self, G_optimizer, C_optimizer, mode_critic, mode_generator,
-    ):
+    def __init__(self, G_optimizer, C_optimizer):
         tf.keras.backend.set_floatx("float64")
         self.G_optimizer = G_optimizer
         self.C_optimizer = C_optimizer
-        self.mode_critic = mode_critic
-        self.mode_generator = mode_generator
 
     def make_generator(self, num_neurons: int, input_shape: (int, None)):
         """Create Generator Network
@@ -48,7 +37,9 @@ class Individual_FairWAN:
         )
 
         generator.add(
-            layers.Dense(32, kernel_initializer="glorot_normal", activation="relu",)
+            layers.Dense(
+                num_neurons, kernel_initializer="glorot_normal", activation="relu"
+            )
         )
 
         generator.add(layers.Dense(1, activation="sigmoid"))
@@ -80,10 +71,7 @@ class Individual_FairWAN:
 
         critic.add(
             layers.Dense(
-                num_neurons,
-                input_shape=input_shape,
-                kernel_initializer="glorot_normal",
-                activation="relu",
+                num_neurons, kernel_initializer="glorot_normal", activation="relu",
             )
         )
 
@@ -93,13 +81,13 @@ class Individual_FairWAN:
     def train(
         self,
         dataset,
-        sampled_batches,
+        batches,
         sampler,
         epochs_total,
         epochs_critic,
         batch_size,
-        informative_variables,
-        num_knn=10,
+        LAMBDA,
+        use_gradient_penalty,
     ):
         """Training Procedure
 
@@ -110,101 +98,106 @@ class Individual_FairWAN:
         epochs_total : int
         epochs_critic : int
         batch_size : int
-        informative_variables : list
-            Colnames of "informative" features
-        save_consistency_score : bool, optional
-            Flag whether to save the consistency score every 10 epochs
-        num_knn : int
-            Number of KNN for consistency score
 
         """
         print(f"Start Training - Total of {epochs_total} Epochs:\n")
-        print(f"Got total number of {len(sampled_batches)} batches!")
+        print(f"Got total number of {len(batches)} batches!")
+
         # Initialize Placeholder
-        G_loss_in_epoch_series, C_loss_in_epoch_series, Consistency_score_series = (
+        BCE_loss_series, W_loss_series, C_loss_series = (
             [],
             [],
             [],
         )
-        sample_count = 0
 
         for epoch in range(epochs_total):
             start = time.time()
             print("-------------------------------------------")
             print(f"Beginning of Epoch: {epoch+1}\n")
 
-            # Take new list of batches
-            batches = sampled_batches[sample_count]
-            sample_count += 1
-            
-            if sample_count == len(sampled_batches):
-                sample_count = 0
+            loss_in_epoch = np.array([0.0, 0.0, 0.0])
 
-            if epoch == 0:
+            if epoch > int(epochs_total * 0.75):
+                print("Train Generator Only")
                 for batch in batches:
                     input_data = sampler._prepare_inputs(dataset, batch)
 
-                    train_step(
-                        self.generator,
-                        self.critic,
-                        self.G_optimizer,
-                        self.C_optimizer,
-                        *input_data,
-                        tf.constant(True),
-                        tf.constant(True),
+                    batch_loss = np.array(
+                        [
+                            loss.numpy()
+                            for loss in _train(
+                                self.generator,
+                                self.critic,
+                                self.G_optimizer,
+                                self.C_optimizer,
+                                *input_data,
+                                LAMBDA=tf.constant(LAMBDA, dtype=tf.float64),
+                                train_generator=True,
+                                train_critic=False,
+                                use_gradient_penalty=use_gradient_penalty,
+                            )
+                        ]
                     )
 
+                    loss_in_epoch += (1 / len(batches)) * batch_loss
+
+                BCE_loss_series, W_loss_series, C_loss_series = _print_and_append_loss(
+                    BCE_loss_series, W_loss_series, C_loss_series, loss_in_epoch
+                )
+                continue
+
+            # Train Critic Only
             for _ in range(epochs_critic):
                 # Train only Critic
                 for batch in batches:
                     input_data = sampler._prepare_inputs(dataset, batch)
 
-                    train_step(
+                    _train(
                         self.generator,
                         self.critic,
                         self.G_optimizer,
                         self.C_optimizer,
                         *input_data,
-                        tf.constant(False),
-                        tf.constant(True),
+                        LAMBDA=tf.constant(LAMBDA, dtype=tf.float64),
+                        train_generator=False,
+                        train_critic=True,
+                        use_gradient_penalty=use_gradient_penalty,
                     )
 
-            loss_in_epoch = np.array([0.0, 0.0])
-
+            # Train Both Networks
             for batch in batches:
                 input_data = sampler._prepare_inputs(dataset, batch)
 
                 batch_loss = np.array(
                     [
                         loss.numpy()
-                        for loss in train_step(
+                        for loss in _train(
                             self.generator,
                             self.critic,
                             self.G_optimizer,
                             self.C_optimizer,
                             *input_data,
-                            tf.constant(True),
-                            tf.constant(True),
+                            LAMBDA=tf.constant(LAMBDA, dtype=tf.float64),
+                            train_generator=True,
+                            train_critic=True,
+                            use_gradient_penalty=use_gradient_penalty,
                         )
                     ]
                 )
 
-                loss_in_epoch += batch_loss
+                loss_in_epoch += (1 / len(batches)) * batch_loss
 
-            # Saving results
-            G_loss_in_epoch_series.append(loss_in_epoch[0])
-            C_loss_in_epoch_series.append(loss_in_epoch[1])
+            BCE_loss_series, W_loss_series, C_loss_series = _print_and_append_loss(
+                BCE_loss_series, W_loss_series, C_loss_series, loss_in_epoch
+            )
 
-            # Output results
-            print(f"Generator Loss: {loss_in_epoch[0]}")
-            print(f"Critic Loss (W-Distance): {loss_in_epoch[1]}")
             print(f"Time for epoch {epoch + 1} is {time.time()-start} sec\n")
 
-        return G_loss_in_epoch_series, C_loss_in_epoch_series, Consistency_score_series
+        return BCE_loss_series, W_loss_series, C_loss_series
 
 
 @tf.function(experimental_relax_shapes=True)
-def train_step(
+def _train(
     generator,
     critic,
     G_optimizer,
@@ -213,8 +206,10 @@ def train_step(
     C_input_real,
     Y_target,
     Mean_C_input_real,
+    LAMBDA,
     train_generator,
     train_critic,
+    use_gradient_penalty,
 ):
     """Summary
 
@@ -235,10 +230,8 @@ def train_step(
         Calculated Generator and Critic Loss
     """
     with tf.GradientTape() as G_tape, tf.GradientTape() as C_tape:
-
         G_output = generator(G_input, training=train_generator)
-
-        C_input_fake = G_output
+        C_input_fake = tf.transpose(G_output)
 
         # Calculate C(X) and C(G(x))
         C_fake = critic(C_input_fake, training=train_critic)
@@ -246,15 +239,22 @@ def train_step(
 
         # Calculate Generator and Critic loss_in_epoch
         C_loss = calculate_critic_loss(critic, C_real, C_fake)
-        G_loss = calculate_generator_loss(
-            generator, C_fake=C_fake, Y_HAT=G_output, Y=Y_target
+
+        generator_loss = calculate_generator_loss(
+            generator,
+            C_real=C_real,
+            C_fake=C_fake,
+            Y_HAT=G_output,
+            Y=Y_target,
+            LAMBDA=LAMBDA,
         )
 
-        gradient_penalty = tf.constant(10., dtype=tf.float64) * add_gradient_penalty(
-            critic, Mean_C_input_real, C_input_fake
-        )
-        #print("Critic loss %f %f" % (C_loss ,gradient_penalty))
-        C_loss += gradient_penalty
+        G_loss = generator_loss[0]
+        cross_entropy_loss = generator_loss[1]
+        wasserstein_loss = generator_loss[2]
+
+        if use_gradient_penalty:
+            C_loss += add_gradient_penalty(critic, Mean_C_input_real, C_input_fake)
 
         # Train Generator
         G_gradients = G_tape.gradient(G_loss, generator.trainable_variables)
@@ -265,15 +265,16 @@ def train_step(
 
         C_optimizer.apply_gradients(zip(C_gradients, critic.trainable_variables))
 
-        # Gradient Clipping
-        # if required
-        # clip_D = [p.assign(tf.clip_by_value(p, -0.01, 0.01)) for p in self.critic.trainable_variables]
+        if not use_gradient_penalty:
+            clip_D = [
+                p.assign(tf.clip_by_value(p, -0.02, 0.02))
+                for p in critic.trainable_variables
+            ]
 
-        return [G_loss, C_loss]
+        return [cross_entropy_loss, wasserstein_loss, C_loss]
 
 
-@tf.function(experimental_relax_shapes=True)
-def calculate_generator_loss(generator, C_fake, Y_HAT, Y):
+def calculate_generator_loss(generator, C_real, C_fake, Y_HAT, Y, LAMBDA):
     """Calculate generator loss
 
     Parameters
@@ -289,13 +290,11 @@ def calculate_generator_loss(generator, C_fake, Y_HAT, Y):
     -------
     generator_loss : tf.float64
     """
-    
-    lambda_wasserstein = tf.constant(100, dtype=tf.float64)
 
-    w_distance = -tf.reduce_mean(C_fake)
+    cross_entropy_loss = tf.keras.losses.BinaryCrossentropy()(Y, Y_HAT)
 
-    lambda_l2 = tf.constant(0.01, dtype=tf.float64)
-    l2_penalty = tf.add_n(
+    LAMBDA_L2 = tf.constant(0.01, dtype=tf.float64)
+    regularization = tf.add_n(
         [
             tf.nn.l2_loss(v)
             for v in generator.trainable_variables
@@ -303,17 +302,14 @@ def calculate_generator_loss(generator, C_fake, Y_HAT, Y):
         ]
     )
 
-    cross_entropy = tf.keras.losses.BinaryCrossentropy()
-    cross_entropy_loss = cross_entropy(Y, Y_HAT)
-    wasserstein_loss = lambda_wasserstein * w_distance
-    regularization_loss = lambda_l2 * l2_penalty
+    w_distance = -tf.reduce_mean(C_fake)
+    wasserstein_loss = LAMBDA * w_distance
 
-    #        print("Loss terms %f , %f, %f" % (cross_entropy_loss,wasserstein_loss,regularization_loss))
+    generator_loss = cross_entropy_loss + wasserstein_loss + LAMBDA_L2 * regularization
 
-    return cross_entropy_loss + wasserstein_loss + regularization_loss
+    return [generator_loss, cross_entropy_loss, wasserstein_loss]
 
 
-@tf.function(experimental_relax_shapes=True)
 def calculate_critic_loss(critic, C_real, C_fake):
     """Calculate critic  loss
 
@@ -328,23 +324,18 @@ def calculate_critic_loss(critic, C_real, C_fake):
     -------
     critic_loss
     """
-    w_distance = tf.reduce_mean(C_fake) - tf.reduce_mean(C_real)
-
-    lambda_l2 = tf.constant(0.01, dtype=tf.float64)
-
-    l2_penalty = lambda_l2 * tf.add_n(
+    LAMBDA_L2 = tf.constant(0.01, dtype=tf.float64)
+    regularization = tf.add_n(
         [tf.nn.l2_loss(v) for v in critic.trainable_variables if "bias" not in v.name]
     )
 
-    return tf.math.add(w_distance, l2_penalty)
+    w_distance = tf.reduce_mean(C_fake) - tf.reduce_mean(C_real)
+    return w_distance + LAMBDA_L2 * regularization
 
 
-@tf.function(experimental_relax_shapes=True)
 def add_gradient_penalty(critic, Mean_C_input_real, C_input_fake):
     """Helper Function: Add gradient penalty to enforce Lipschitz continuity
-
         Interpolates = Real - alpha * ( Fake - Real )
-
 
     Parameters
     ----------
@@ -369,6 +360,24 @@ def add_gradient_penalty(critic, Mean_C_input_real, C_input_fake):
 
     slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients)))
 
-    gradient_penalty = tf.reduce_mean((slopes - 1) ** 2)
+    gradient_penalty = tf.constant(10.0, dtype=tf.float64) * tf.reduce_mean(
+        (slopes - 1) ** 2
+    )
 
     return gradient_penalty
+
+
+def _print_and_append_loss(
+    BCE_loss_series, W_loss_series, C_loss_series, loss_in_epoch
+):
+    # Saving results
+    BCE_loss_series.append(loss_in_epoch[0])
+    W_loss_series.append(loss_in_epoch[1])
+    C_loss_series.append(loss_in_epoch[2])
+
+    # Output results
+    print(f"Generator - Binary-Cross Entropy Loss: {loss_in_epoch[0]}")
+    print(f"Generator - Wasserstein Loss: {loss_in_epoch[1]}")
+    print(f"Critic - Wasserstein Distance: {loss_in_epoch[2]}")
+
+    return BCE_loss_series, W_loss_series, C_loss_series
