@@ -86,7 +86,8 @@ class Individual_FairWAN:
         epochs_total,
         epochs_critic,
         batch_size,
-        LAMBDA,
+        lambda_wasserstein,
+        lambda_regularization,
         use_gradient_penalty,
     ):
         """Training Procedure
@@ -117,35 +118,6 @@ class Individual_FairWAN:
 
             loss_in_epoch = np.array([0.0, 0.0, 0.0])
 
-            if epoch > int(epochs_total * 0.75):
-                print("Train Generator Only")
-                for batch in batches:
-                    input_data = sampler._prepare_inputs(dataset, batch)
-
-                    batch_loss = np.array(
-                        [
-                            loss.numpy()
-                            for loss in _train(
-                                self.generator,
-                                self.critic,
-                                self.G_optimizer,
-                                self.C_optimizer,
-                                *input_data,
-                                LAMBDA=tf.constant(LAMBDA, dtype=tf.float64),
-                                train_generator=True,
-                                train_critic=False,
-                                use_gradient_penalty=use_gradient_penalty,
-                            )
-                        ]
-                    )
-
-                    loss_in_epoch += (1 / len(batches)) * batch_loss
-
-                BCE_loss_series, W_loss_series, C_loss_series = _print_and_append_loss(
-                    BCE_loss_series, W_loss_series, C_loss_series, loss_in_epoch
-                )
-                continue
-
             # Train Critic Only
             for _ in range(epochs_critic):
                 # Train only Critic
@@ -158,7 +130,12 @@ class Individual_FairWAN:
                         self.G_optimizer,
                         self.C_optimizer,
                         *input_data,
-                        LAMBDA=tf.constant(LAMBDA, dtype=tf.float64),
+                        lambda_wasserstein=tf.constant(
+                            lambda_wasserstein, dtype=tf.float64
+                        ),
+                        lambda_regularization=tf.constant(
+                            lambda_regularization, dtype=tf.float64
+                        ),
                         train_generator=False,
                         train_critic=True,
                         use_gradient_penalty=use_gradient_penalty,
@@ -177,7 +154,12 @@ class Individual_FairWAN:
                             self.G_optimizer,
                             self.C_optimizer,
                             *input_data,
-                            LAMBDA=tf.constant(LAMBDA, dtype=tf.float64),
+                            lambda_wasserstein=tf.constant(
+                                lambda_wasserstein, dtype=tf.float64
+                            ),
+                            lambda_regularization=tf.constant(
+                                lambda_regularization, dtype=tf.float64
+                            ),
                             train_generator=True,
                             train_critic=True,
                             use_gradient_penalty=use_gradient_penalty,
@@ -205,8 +187,9 @@ def _train(
     G_input,
     C_input_real,
     Y_target,
-    Mean_C_input_real,
-    LAMBDA,
+    C_input_gp,
+    lambda_wasserstein,
+    lambda_regularization,
     train_generator,
     train_critic,
     use_gradient_penalty,
@@ -238,7 +221,12 @@ def _train(
         C_real = critic(C_input_real, training=train_critic)
 
         # Calculate Generator and Critic loss_in_epoch
-        C_loss = calculate_critic_loss(critic, C_real, C_fake)
+        C_loss = calculate_critic_loss(
+            critic,
+            C_real=C_real,
+            C_fake=C_fake,
+            lambda_regularization=lambda_regularization,
+        )
 
         generator_loss = calculate_generator_loss(
             generator,
@@ -246,7 +234,8 @@ def _train(
             C_fake=C_fake,
             Y_HAT=G_output,
             Y=Y_target,
-            LAMBDA=LAMBDA,
+            lambda_wasserstein=lambda_wasserstein,
+            lambda_regularization=lambda_regularization,
         )
 
         G_loss = generator_loss[0]
@@ -254,7 +243,7 @@ def _train(
         wasserstein_loss = generator_loss[2]
 
         if use_gradient_penalty:
-            C_loss += add_gradient_penalty(critic, Mean_C_input_real, C_input_fake)
+            C_loss += add_gradient_penalty(critic, C_input_gp, C_input_fake)
 
         # Train Generator
         G_gradients = G_tape.gradient(G_loss, generator.trainable_variables)
@@ -274,7 +263,9 @@ def _train(
         return [cross_entropy_loss, wasserstein_loss, C_loss]
 
 
-def calculate_generator_loss(generator, C_real, C_fake, Y_HAT, Y, LAMBDA):
+def calculate_generator_loss(
+    generator, C_real, C_fake, Y_HAT, Y, lambda_wasserstein, lambda_regularization
+):
     """Calculate generator loss
 
     Parameters
@@ -291,9 +282,6 @@ def calculate_generator_loss(generator, C_real, C_fake, Y_HAT, Y, LAMBDA):
     generator_loss : tf.float64
     """
 
-    cross_entropy_loss = tf.keras.losses.BinaryCrossentropy()(Y, Y_HAT)
-
-    LAMBDA_L2 = tf.constant(0.01, dtype=tf.float64)
     regularization = tf.add_n(
         [
             tf.nn.l2_loss(v)
@@ -303,14 +291,17 @@ def calculate_generator_loss(generator, C_real, C_fake, Y_HAT, Y, LAMBDA):
     )
 
     w_distance = -tf.reduce_mean(C_fake)
-    wasserstein_loss = LAMBDA * w_distance
 
-    generator_loss = cross_entropy_loss + wasserstein_loss + LAMBDA_L2 * regularization
+    cross_entropy_loss = tf.keras.losses.BinaryCrossentropy()(Y, Y_HAT)
+    wasserstein_loss = lambda_wasserstein * w_distance
+    regularization_loss = lambda_regularization * regularization
+
+    generator_loss = cross_entropy_loss + wasserstein_loss + regularization_loss
 
     return [generator_loss, cross_entropy_loss, wasserstein_loss]
 
 
-def calculate_critic_loss(critic, C_real, C_fake):
+def calculate_critic_loss(critic, C_real, C_fake, lambda_regularization):
     """Calculate critic  loss
 
     Parameters
@@ -324,16 +315,15 @@ def calculate_critic_loss(critic, C_real, C_fake):
     -------
     critic_loss
     """
-    LAMBDA_L2 = tf.constant(0.01, dtype=tf.float64)
     regularization = tf.add_n(
         [tf.nn.l2_loss(v) for v in critic.trainable_variables if "bias" not in v.name]
     )
 
     w_distance = tf.reduce_mean(C_fake) - tf.reduce_mean(C_real)
-    return w_distance + LAMBDA_L2 * regularization
+    return w_distance + lambda_regularization * regularization
 
 
-def add_gradient_penalty(critic, Mean_C_input_real, C_input_fake):
+def add_gradient_penalty(critic, C_input_gp, C_input_fake):
     """Helper Function: Add gradient penalty to enforce Lipschitz continuity
         Interpolates = Real - alpha * ( Fake - Real )
 
@@ -353,14 +343,14 @@ def add_gradient_penalty(critic, Mean_C_input_real, C_input_fake):
         shape=[1, int(C_input_fake.shape[1])], minval=0.0, maxval=1.0, dtype=tf.float64
     )
 
-    interpolates = Mean_C_input_real + alpha * (C_input_fake - Mean_C_input_real)
+    interpolates = C_input_gp + alpha * (C_input_fake - C_input_gp)
 
     disc_interpolates = critic(interpolates)
     gradients = tf.gradients(disc_interpolates, [interpolates])[0]
 
     slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients)))
 
-    gradient_penalty = tf.constant(10.0, dtype=tf.float64) * tf.reduce_mean(
+    gradient_penalty = tf.constant(0.1, dtype=tf.float64) * tf.reduce_mean(
         (slopes - 1) ** 2
     )
 

@@ -1,18 +1,17 @@
 import numpy as np
 import tensorflow as tf
-from fairml.metrics.consistency import fit_nearest_neighbors
+from sklearn.neighbors import NearestNeighbors
 
 
 class KNNEngine:
     """ K-Neirest-Neighbors Engine"""
 
-    def __init__(self, dataset, k, radius):
+    def __init__(self, dataset):
         self.dataset = dataset
-        self.neigh = fit_nearest_neighbors(dataset, k)
-        self.radius = radius
+        self.neigh = NearestNeighbors(metric="euclidean").fit(dataset)
 
-    def __call__(self, observations):
-        neigh_dist, neigh_idx = self.neigh.radius_neighbors(observations, self.radius)
+    def __call__(self, observations, radius):
+        neigh_dist, neigh_idx = self.neigh.radius_neighbors(observations, radius)
         return neigh_dist, neigh_idx
 
 
@@ -22,8 +21,6 @@ class KNNSampler:
     Attributes
     ----------
     dataset : pd.Dataframe
-    k : int
-        Number of KNN derived total
     KNNEngine : KNNEngine
     i_idx : list
         Indizes of informative columns
@@ -35,19 +32,16 @@ class KNNSampler:
         Indizes of Y target
     """
 
-    def __init__(
-        self, dataset, x_idx, s_idx, y_idx, i_idx, k, radius,
-    ):
+    def __init__(self, dataset, x_idx, s_idx, y_idx, i_idx):
         tf.keras.backend.set_floatx("float64")
         self.dataset = dataset.values
-        self.KNNEngine = KNNEngine(self.dataset[:, i_idx], k, radius)
+        self.KNNEngine = KNNEngine(self.dataset[:, i_idx])
         self.x_idx = x_idx
         self.s_idx = s_idx
         self.y_idx = y_idx
         self.i_idx = i_idx
-        self.k = k
 
-    def __call__(self, batch_size: int):
+    def __call__(self, batch_size=64, num_similar_samples=5, radius=0.0):
         """Execute sampling.
 
         Parameters
@@ -77,14 +71,14 @@ class KNNSampler:
             ]
             slice_dataset = self.dataset[observation_idx_knn, :]
 
-            # (batch_size,k=20)
-            neigh_dist, neigh_idx = self.KNNEngine(slice_dataset[:, self.i_idx])
+            neigh_dist, neigh_idx = self.KNNEngine(slice_dataset[:, self.i_idx], radius)
 
             for _, idx in enumerate(neigh_idx):
+
                 if len(idx) == 0:
-                    print("No NN")
                     continue
-                KNN_IDX.extend([np.random.choice(idx, 5)])
+
+                KNN_IDX.extend([np.random.choice(idx, num_similar_samples)])
 
             KNN_IDX = np.array(KNN_IDX)
             batch_indizes += [(observation_idx_knn, KNN_IDX)]
@@ -116,7 +110,7 @@ class KNNSampler:
             G_input: Generator Input
             C_input_real: Real Y values of sample 1
             Y_target: Real Y values of sample 2
-            Mean_C_input_real: One NN of each element of sample 1
+            C_input_gp: One NN of each element of sample 1
         """
 
         # Generator Input
@@ -126,14 +120,14 @@ class KNNSampler:
         # Critic Input
         total_target_values = dataset.iloc[:, self.y_idx].values
         C_input_real = np.squeeze(total_target_values[batch_idx[1]])
-        Mean_C_input_real = C_input_real.mean(axis=1)
+        C_input_gp = C_input_real.mean(axis=1)
 
         # Convert to Tensor
         C_input_real = tf.transpose(
             tf.convert_to_tensor(C_input_real, dtype=tf.float64)
         )
-        Mean_C_input_real = tf.convert_to_tensor(Mean_C_input_real, dtype=tf.float64)
+        C_input_gp = tf.convert_to_tensor(C_input_gp, dtype=tf.float64)
         G_input = tf.convert_to_tensor(G_input, dtype=tf.float64)
         Y_target = tf.convert_to_tensor(Y_target, dtype=tf.float64)
 
-        return [G_input, C_input_real, Y_target, Mean_C_input_real]
+        return [G_input, C_input_real, Y_target, C_input_gp]

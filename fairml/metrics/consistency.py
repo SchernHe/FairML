@@ -2,22 +2,6 @@ import numpy as np
 from sklearn.neighbors import NearestNeighbors
 
 
-def fit_nearest_neighbors(df, num_neigh):
-    """ Helper function
-    Parameters
-    ----------
-        num_neigh : int
-        Number of nearest neighbours
-
-    Returns
-    -------
-        neigh: Fitted NN
-        """
-    neigh = NearestNeighbors(num_neigh, metric="euclidean")
-    neigh.fit(df)
-    return neigh
-
-
 def _calculate_consistency(df, row, Y_Pred, neigh, columns, radius):
     """Helper function
 
