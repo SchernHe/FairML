@@ -8,14 +8,25 @@ import numpy as np
 
 
 class Individual_FairWAN:
+    """Fair-WGAN Model"""
+
     def __init__(self, G_optimizer, C_optimizer):
+        """Summary
+        
+        Parameters
+        ----------
+        G_optimizer : tf.Optimizer
+            Generator Optimizer
+        C_optimizer : tf.Optimizer
+            Critic Optimizer
+        """
         tf.keras.backend.set_floatx("float64")
         self.G_optimizer = G_optimizer
         self.C_optimizer = C_optimizer
 
     def make_generator(self, num_neurons: int, input_shape: (int, None)):
         """Create Generator Network
-
+        
         Parameters
         ----------
         num_neurons : int
@@ -49,7 +60,7 @@ class Individual_FairWAN:
         self, num_neurons: int, input_shape: (int, None),
     ):
         """Create Critic Network
-
+        
         Parameters
         ----------
         num_neurons : int
@@ -57,6 +68,7 @@ class Individual_FairWAN:
         input_shape : int, None
             Description
         """
+ 
         critic = tf.keras.Sequential()
         critic._name = "Critic"
 
@@ -90,17 +102,35 @@ class Individual_FairWAN:
         lambda_regularization,
         use_gradient_penalty,
     ):
-        """Training Procedure
-
+        """Train Fair-WGAN model
+        
         Parameters
         ----------
         dataset : pd.DataFrame
-        sampler : fairml.models.Sampler
+            Dataframe with samples
+        batches : list
+            List of samples provided by KNNSampler
+        sampler : KNNSampler
+            Sampler engine
         epochs_total : int
+            Number of total epochs
         epochs_critic : int
+            Number of critic iterations for each generator iteration
         batch_size : int
+            Number of samples in each batch
+        lambda_wasserstein : tf.tensor(dtype=tf.Float64)
+            Mutiplier for wasserstein term
+        lambda_regularization : tf.tensor(dtype=tf.Float64)
+            Mutiplier for regularization term
+        use_gradient_penalty : boold
+            Boolean flag indicating to use gradient penalty or gradient clipping
+
+        Returns
+        -------
+            Series of losses in each epoch [BCE_loss, W_loss, C_loss]
 
         """
+
         print(f"Start Training - Total of {epochs_total} Epochs:\n")
         print(f"Got total number of {len(batches)} batches!")
 
@@ -194,24 +224,43 @@ def _train(
     train_critic,
     use_gradient_penalty,
 ):
-    """Summary
-
+    """Training step of Fair-WGAN model
+    
     Parameters
     ----------
-    G_input : np.matrix
-    C_input_real : np.matrix
-    Y_target : np.matrix
-        Y Values of Sample One
-    train_generator : bool, optional
-        Flag whether to train generator
-    train_critic : bool, optional
-        FLag whether to train critic
-
+    generator : tf.Sequential
+        Generator neural network
+    critic : tf.Sequential
+        Critic neural network
+    G_optimizer : tf.Optimizer
+        Generator Optimizer
+    C_optimizer : tf.Optimizer
+        Critic Optimizer
+    G_input : tf.Tensor
+        Description
+    C_input_real : tf.Tensor
+        Description
+    Y_target : tf.Tensor
+        Description
+    C_input_gp : tf.Tensor
+        Description
+    lambda_wasserstein : tf.tensor(dtype=tf.Float64)
+        Mutiplier for wasserstein term
+    lambda_regularization : tf.tensor(dtype=tf.Float64)
+        Mutiplier for regularization term
+    train_generator : bool
+        Boolean flag indicating to train generator
+    train_critic : bool
+        Boolean flag indicating to train critic
+    use_gradient_penalty : boold
+        Boolean flag indicating to use gradient penalty or gradient clipping
+    
     Returns
     -------
-    List
-        Calculated Generator and Critic Loss
+        Loss in iteration [BCE_loss, W_loss, C_loss]
+
     """
+
     with tf.GradientTape() as G_tape, tf.GradientTape() as C_tape:
         G_output = generator(G_input, training=train_generator)
         C_input_fake = tf.transpose(G_output)
@@ -230,7 +279,6 @@ def _train(
 
         generator_loss = calculate_generator_loss(
             generator,
-            C_real=C_real,
             C_fake=C_fake,
             Y_HAT=G_output,
             Y=Y_target,
@@ -264,22 +312,30 @@ def _train(
 
 
 def calculate_generator_loss(
-    generator, C_real, C_fake, Y_HAT, Y, lambda_wasserstein, lambda_regularization
+    generator, C_fake, Y_HAT, Y, lambda_wasserstein, lambda_regularization
 ):
-    """Calculate generator loss
-
+    """Calculate generator loss term
+     
     Parameters
     ----------
-    C_fake : tf.tensor
-        Critic output fake
-    Y_HAT : tf.tensor
-        Generator predictions of samle one
-    Y : tf.tensor
-        True y values of sample one
+    generator : tf.Sequential
+        Generator neural network
+    C_fake : tf.Tensor
+        Critic output of Generator(X)
+    Y_HAT : tf.Tensor
+        Generator predictions of target labels
+    Y : tf.Tensor
+        True labels
+    lambda_wasserstein : tf.tensor(dtype=tf.Float64)
+        Mutiplier for wasserstein term
+    lambda_regularization : tf.tensor(dtype=tf.Float64)
+        Mutiplier for regularization term
 
     Returns
     -------
-    generator_loss : tf.float64
+    tf.tensor(dtype=tf.Float64)
+        Generator Loss = Binary Cross Entropy + Wasserstein-1 + Regularization
+
     """
 
     regularization = tf.add_n(
@@ -302,19 +358,26 @@ def calculate_generator_loss(
 
 
 def calculate_critic_loss(critic, C_real, C_fake, lambda_regularization):
-    """Calculate critic  loss
-
+    """Calculate critic loss term
+    
     Parameters
     ----------
-    C_fake : tf.tensor
-        Critic output real
-    C_fake : tf.tensor
-        Critic output fake
-
+    critic : tf.Sequential
+        Critic neural network
+    C_real : tf.Tensor
+        Critic output of target values of similar samples provided by the Sampler
+    C_fake : tf.Tensor
+        Critic output of Generator(X)
+    lambda_regularization : tf.tensor(dtype=tf.Float64)
+        Mutiplier for regularization term
+    
     Returns
     -------
-    critic_loss
+    tf.tensor(dtype=tf.Float64)
+        Critic Loss = Wasserstein-1 + Regularization
+
     """
+
     regularization = tf.add_n(
         [tf.nn.l2_loss(v) for v in critic.trainable_variables if "bias" not in v.name]
     )
@@ -326,19 +389,24 @@ def calculate_critic_loss(critic, C_real, C_fake, lambda_regularization):
 def add_gradient_penalty(critic, C_input_gp, C_input_fake):
     """Helper Function: Add gradient penalty to enforce Lipschitz continuity
         Interpolates = Real - alpha * ( Fake - Real )
-
+    
     Parameters
     ----------
-    C_input_real : np.matrix
-        Critic Input Real (Sample Two)
+    critic : tf.Sequential
+        Critic neural network
+    C_input_gp : np.matrix
+        Critic input for gradient penalty. Mean values of all similar samples
+        provided by the Sampler.
     C_input_fake : tf.Tensor
-        Critic Input Fake (Sample 2 X with generator predictions)
-
+        Critic input Generator(X)
+    
     Returns
     -------
-    tf.tensor of type tf.float64
-        Gradient penalty term
+    tf.tensor(dtype=tf.Float64)
+        Gradient Penalty
+
     """
+
     alpha = tf.random.uniform(
         shape=[1, int(C_input_fake.shape[1])], minval=0.0, maxval=1.0, dtype=tf.float64
     )
@@ -360,7 +428,25 @@ def add_gradient_penalty(critic, C_input_gp, C_input_fake):
 def _print_and_append_loss(
     BCE_loss_series, W_loss_series, C_loss_series, loss_in_epoch
 ):
-    # Saving results
+    """Helper function to print and save loss values in each epoch
+
+    Parameters
+    ----------
+    BCE_loss_series : list
+        Binary Cross-Entropy loss values
+    W_loss_series : list
+        Wasserstein-1 loss values in generator
+    C_loss_series : list
+        Wasserstein-1 loss values in critic
+    loss_in_epoch : list
+        Losses in the epoch of the form [BCE_Loss, W_Loss, C_Loss]
+    
+    Returns
+    -------
+    List of losses [BCE_loss, W_loss, C_loss]
+
+    """
+
     BCE_loss_series.append(loss_in_epoch[0])
     W_loss_series.append(loss_in_epoch[1])
     C_loss_series.append(loss_in_epoch[2])

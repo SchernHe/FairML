@@ -76,6 +76,7 @@ class KNNSampler:
             for _, idx in enumerate(neigh_idx):
 
                 if len(idx) == 0:
+                    print("No IDX")
                     continue
 
                 KNN_IDX.extend([np.random.choice(idx, num_similar_samples)])
