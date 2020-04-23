@@ -57,6 +57,7 @@ class KNNSampler:
             The length of these samples are batch_size and k*batch_size
 
         """
+        np.random.seed(30041994)
         total_idx = np.array(range(0, len(self.dataset) - 1))
 
         num_batches = len(total_idx) // batch_size
