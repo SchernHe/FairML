@@ -100,6 +100,7 @@ class Individual_FairWAN:
         batch_size,
         lambda_wasserstein,
         lambda_regularization,
+        lambda_gradient_penalty,
         use_gradient_penalty,
     ):
         """Train Fair-WGAN model
@@ -118,10 +119,12 @@ class Individual_FairWAN:
             Number of critic iterations for each generator iteration
         batch_size : int
             Number of samples in each batch
-        lambda_wasserstein : tf.tensor(dtype=tf.Float64)
+        lambda_wasserstein : float
             Mutiplier for wasserstein term
-        lambda_regularization : tf.tensor(dtype=tf.Float64)
+        lambda_regularization : float
             Mutiplier for regularization term
+        lambda_gradient_penalty: float
+            Multiplier for gradient penalty term
         use_gradient_penalty : boold
             Boolean flag indicating to use gradient penalty or gradient clipping
 
@@ -166,6 +169,9 @@ class Individual_FairWAN:
                         lambda_regularization=tf.constant(
                             lambda_regularization, dtype=tf.float64
                         ),
+                       lambda_gradient_penalty=tf.constant(
+                            lambda_gradient_penalty, dtype=tf.float64
+                        ),
                         train_generator=False,
                         train_critic=True,
                         use_gradient_penalty=use_gradient_penalty,
@@ -189,6 +195,9 @@ class Individual_FairWAN:
                             ),
                             lambda_regularization=tf.constant(
                                 lambda_regularization, dtype=tf.float64
+                            ),
+                            lambda_gradient_penalty=tf.constant(
+                                lambda_gradient_penalty, dtype=tf.float64
                             ),
                             train_generator=True,
                             train_critic=True,
@@ -220,6 +229,7 @@ def _train(
     C_input_gp,
     lambda_wasserstein,
     lambda_regularization,
+    lambda_gradient_penalty,
     train_generator,
     train_critic,
     use_gradient_penalty,
@@ -248,6 +258,8 @@ def _train(
         Mutiplier for wasserstein term
     lambda_regularization : tf.tensor(dtype=tf.Float64)
         Mutiplier for regularization term
+    lambda_gradient_penalty: tf.tensor(dtype=tf.Float64)
+        Multiplier for gradient penalty term
     train_generator : bool
         Boolean flag indicating to train generator
     train_critic : bool
@@ -291,7 +303,7 @@ def _train(
         wasserstein_loss = generator_loss[2]
 
         if use_gradient_penalty:
-            C_loss += add_gradient_penalty(critic, C_input_gp, C_input_fake)
+            C_loss += lambda_gradient_penalty * add_gradient_penalty(critic, C_input_gp, C_input_fake)
 
         # Train Generator
         G_gradients = G_tape.gradient(G_loss, generator.trainable_variables)
@@ -418,11 +430,7 @@ def add_gradient_penalty(critic, C_input_gp, C_input_fake):
 
     slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients)))
 
-    gradient_penalty = tf.constant(0.1, dtype=tf.float64) * tf.reduce_mean(
-        (slopes - 1) ** 2
-    )
-
-    return gradient_penalty
+    return tf.reduce_mean((slopes - 1) ** 2)
 
 
 def _print_and_append_loss(
