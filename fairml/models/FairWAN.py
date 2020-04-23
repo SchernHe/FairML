@@ -11,7 +11,7 @@ class Individual_FairWAN:
     """Fair-WGAN Model"""
 
     def __init__(self, G_optimizer, C_optimizer):
-        """Summary
+        """Initialize Fair-WGAN
         
         Parameters
         ----------
@@ -400,8 +400,9 @@ def calculate_critic_loss(critic, C_real, C_fake, lambda_regularization):
 
 def add_gradient_penalty(critic, C_input_gp, C_input_fake):
     """Helper Function: Add gradient penalty to enforce Lipschitz continuity
+
         Interpolates = Real - alpha * ( Fake - Real )
-    
+
     Parameters
     ----------
     critic : tf.Sequential
@@ -459,7 +460,6 @@ def _print_and_append_loss(
     W_loss_series.append(loss_in_epoch[1])
     C_loss_series.append(loss_in_epoch[2])
 
-    # Output results
     print(f"Generator - Binary-Cross Entropy Loss: {loss_in_epoch[0]}")
     print(f"Generator - Wasserstein Loss: {loss_in_epoch[1]}")
     print(f"Critic - Wasserstein Distance: {loss_in_epoch[2]}")
