@@ -12,7 +12,7 @@ class Individual_FairWAN:
 
     def __init__(self, G_optimizer, C_optimizer):
         """Initialize Fair-WGAN
-        
+
         Parameters
         ----------
         G_optimizer : tf.Optimizer
@@ -26,7 +26,7 @@ class Individual_FairWAN:
 
     def make_generator(self, num_neurons: int, input_shape: (int, None)):
         """Create Generator Network
-        
+
         Parameters
         ----------
         num_neurons : int
@@ -60,7 +60,7 @@ class Individual_FairWAN:
         self, num_neurons: int, input_shape: (int, None),
     ):
         """Create Critic Network
-        
+
         Parameters
         ----------
         num_neurons : int
@@ -68,7 +68,7 @@ class Individual_FairWAN:
         input_shape : int, None
             Description
         """
- 
+
         critic = tf.keras.Sequential()
         critic._name = "Critic"
 
@@ -104,7 +104,7 @@ class Individual_FairWAN:
         use_gradient_penalty,
     ):
         """Train Fair-WGAN model
-        
+
         Parameters
         ----------
         dataset : pd.DataFrame
@@ -169,7 +169,7 @@ class Individual_FairWAN:
                         lambda_regularization=tf.constant(
                             lambda_regularization, dtype=tf.float64
                         ),
-                       lambda_gradient_penalty=tf.constant(
+                        lambda_gradient_penalty=tf.constant(
                             lambda_gradient_penalty, dtype=tf.float64
                         ),
                         train_generator=False,
@@ -235,7 +235,7 @@ def _train(
     use_gradient_penalty,
 ):
     """Training step of Fair-WGAN model
-    
+
     Parameters
     ----------
     generator : tf.Sequential
@@ -266,7 +266,7 @@ def _train(
         Boolean flag indicating to train critic
     use_gradient_penalty : boold
         Boolean flag indicating to use gradient penalty or gradient clipping
-    
+
     Returns
     -------
         Loss in iteration [BCE_loss, W_loss, C_loss]
@@ -303,7 +303,9 @@ def _train(
         wasserstein_loss = generator_loss[2]
 
         if use_gradient_penalty:
-            C_loss += lambda_gradient_penalty * add_gradient_penalty(critic, C_input_gp, C_input_fake)
+            C_loss += lambda_gradient_penalty * add_gradient_penalty(
+                critic, C_input_gp, C_input_fake
+            )
 
         # Train Generator
         G_gradients = G_tape.gradient(G_loss, generator.trainable_variables)
@@ -327,7 +329,7 @@ def calculate_generator_loss(
     generator, C_fake, Y_HAT, Y, lambda_wasserstein, lambda_regularization
 ):
     """Calculate generator loss term
-     
+
     Parameters
     ----------
     generator : tf.Sequential
@@ -371,7 +373,7 @@ def calculate_generator_loss(
 
 def calculate_critic_loss(critic, C_real, C_fake, lambda_regularization):
     """Calculate critic loss term
-    
+
     Parameters
     ----------
     critic : tf.Sequential
@@ -382,7 +384,7 @@ def calculate_critic_loss(critic, C_real, C_fake, lambda_regularization):
         Critic output of Generator(X)
     lambda_regularization : tf.tensor(dtype=tf.Float64)
         Mutiplier for regularization term
-    
+
     Returns
     -------
     tf.tensor(dtype=tf.Float64)
@@ -412,7 +414,7 @@ def add_gradient_penalty(critic, C_input_gp, C_input_fake):
         provided by the Sampler.
     C_input_fake : tf.Tensor
         Critic input Generator(X)
-    
+
     Returns
     -------
     tf.tensor(dtype=tf.Float64)
@@ -449,7 +451,7 @@ def _print_and_append_loss(
         Wasserstein-1 loss values in critic
     loss_in_epoch : list
         Losses in the epoch of the form [BCE_Loss, W_Loss, C_Loss]
-    
+
     Returns
     -------
     List of losses [BCE_loss, W_loss, C_loss]

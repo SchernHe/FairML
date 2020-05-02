@@ -68,7 +68,7 @@ class KNNSampler:
             KNN_IDX = []
 
             observation_idx_knn = total_idx[
-                (_ * batch_size) : (_ * batch_size + batch_size)
+                (_ * batch_size):(_ * batch_size + batch_size)
             ]
             slice_dataset = self.dataset[observation_idx_knn, :]
 
