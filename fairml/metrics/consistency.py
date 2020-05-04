@@ -102,4 +102,10 @@ def calculate_consistency(
     )
     benchmark_consistency = 1 - df["Benchmark_Con"].mean()
 
-    return consistency_scores, benchmark_consistency, accuracy_scores, precision_scores
+    return (
+        consistency_scores,
+        benchmark_consistency,
+        accuracy_scores,
+        precision_scores,
+        df,
+    )
