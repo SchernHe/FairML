@@ -1,25 +1,4 @@
 import numpy as np
-from sklearn.metrics import accuracy_score, precision_score
-
-
-def _get_knn_idx(row, neigh, radius, columns):
-    """Retrieve the NN of a sample within a specified radius.
-
-    Parameters
-    ----------
-    row : pd.Series
-    neigh : sklearn.NearestNeighbors
-    radius : float
-    columns : list
-
-    Returns
-    -------
-    list
-        Nearest Neighbors of given sample within radius
-    """
-    neigh_dist, neigh_idx = neigh.radius_neighbors([row[columns]], radius)
-    return neigh_idx[0]
-
 
 def _calculate_consistency(row, df, Y):
     """Helper function to calculate the consistency score
@@ -41,71 +20,49 @@ def _calculate_consistency(row, df, Y):
     row_y = row[Y]
     return np.abs(row_y - knn_y).mean()
 
-
 def calculate_consistency(
     df,
-    neigh,
+    target_variable,
     min_tau,
     max_tau,
     step_size,
-    target_variable,
-    informative_variables,
-    radius,
 ):
     """Calculate consistency scores for the given taus in [min_tau,max_tau].
 
     Parameters
     ----------
     df : pd.DataFrame
-    neigh : sklearn.NearestNeighbors
+    target_variable : str
     min_tau : float
     max_tau : float
     step_size : float
-    target_variable : str
-    informative_variables : list
-    radius : float
-
+    
     Returns
     -------
     list
-        Score values: Consistency, Accuracy and Precision
+        Consistency scores for model and benchmark
     """
-    Y_tau = []
-    consistency_scores = []
-    accuracy_scores = []
-    precision_scores = []
+
+    model_consistency = []
+    benchmark_consistency = []
+
 
     for tau in np.arange(min_tau, max_tau + step_size, step_size):
-        colname = "Y_" + str(int(tau * 100))
-        df[colname] = df["Y_SCORE"].apply(lambda row: 1 if row >= tau else 0)
-        Y_tau.extend([colname])
+        
+        model_col = "Y_" + str(int(tau * 100))
+        benchmark_col = "Y_BENCHMARK_" + str(int(tau * 100))
+        
+        df[model_col] = 0
+        df.loc[df.Y_SCORE>=tau,model_col] = 1
 
-    df["KNN_IDX"] = df.apply(
-        lambda row: _get_knn_idx(row, neigh, radius, informative_variables), axis=1
-    )
+        df[benchmark_col] = 0
+        df.loc[df.Y_BENCHMARK_SCORE>=tau,benchmark_col] = 1
 
-    for Y in Y_tau:
-        con_col = "Con_" + Y
+        model_consistency_scores = df.apply(lambda row: _calculate_consistency(row, df, Y=model_col), axis=1)
+        benchmark_consistency_scores = df.apply(lambda row: _calculate_consistency(row, df, Y=benchmark_col), axis=1)
 
-        df[con_col] = df.apply(lambda row: _calculate_consistency(row, df, Y=Y), axis=1)
+        model_consistency.extend([1 - model_consistency_scores.mean()])
+        benchmark_consistency.extend([1 - benchmark_consistency_scores.mean()])
 
-        consistency = 1 - df[con_col].mean()
-        acc = accuracy_score(df[target_variable], df[Y])
-        prec = precision_score(df[target_variable], df[Y])
+    return np.array(model_consistency), np.array(benchmark_consistency)
 
-        consistency_scores.extend([consistency])
-        accuracy_scores.extend([acc])
-        precision_scores.extend([prec])
-
-    df["Benchmark_Con"] = df.apply(
-        lambda row: _calculate_consistency(row, df, Y="Y_BENCHMARK"), axis=1
-    )
-    benchmark_consistency = 1 - df["Benchmark_Con"].mean()
-
-    return (
-        consistency_scores,
-        benchmark_consistency,
-        accuracy_scores,
-        precision_scores,
-        df,
-    )
