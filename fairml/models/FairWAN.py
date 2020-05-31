@@ -149,15 +149,65 @@ class Individual_FairWAN:
             print("-------------------------------------------")
             print(f"Beginning of Epoch: {epoch+1}\n")
 
-            loss_in_epoch = np.array([0.0, 0.0, 0.0])
-
             # Train Critic Only
             for _ in range(epochs_critic):
-                # Train only Critic
-                for batch in batches:
-                    input_data = sampler._prepare_inputs(dataset, batch)
+                self.training_iteration(
+                    dataset=dataset,
+                    batches=batches,
+                    sampler=sampler,
+                    lambda_wasserstein=lambda_wasserstein,
+                    lambda_regularization=lambda_regularization,
+                    lambda_gradient_penalty=lambda_gradient_penalty,
+                    use_gradient_penalty=use_gradient_penalty,
+                    train_generator=False,
+                    train_critic=True,
+                    return_loss=True,
+                )
 
-                    _train(
+            # Train Both Networks
+            loss_in_epoch = self.training_iteration(
+                dataset=dataset,
+                batches=batches,
+                sampler=sampler,
+                lambda_wasserstein=lambda_wasserstein,
+                lambda_regularization=lambda_regularization,
+                lambda_gradient_penalty=lambda_gradient_penalty,
+                use_gradient_penalty=use_gradient_penalty,
+                train_generator=True,
+                train_critic=True,
+                return_loss=True,
+            )
+
+            BCE_loss_series, W_loss_series, C_loss_series = _print_and_append_loss(
+                BCE_loss_series, W_loss_series, C_loss_series, loss_in_epoch
+            )
+
+            print(f"Time for epoch {epoch + 1} is {time.time()-start} sec\n")
+
+        return BCE_loss_series, W_loss_series, C_loss_series
+
+    def training_iteration(
+        self,
+        dataset,
+        batches,
+        sampler,
+        lambda_wasserstein,
+        lambda_regularization,
+        lambda_gradient_penalty,
+        use_gradient_penalty,
+        train_generator=True,
+        train_critic=True,
+        return_loss=True,
+    ):
+        loss_in_epoch = np.array([0.0, 0.0, 0.0])
+        # Train Both Networks
+        for batch in batches:
+            input_data = sampler._prepare_inputs(dataset, batch)
+
+            batch_loss = np.array(
+                [
+                    loss.numpy()
+                    for loss in _train(
                         self.generator,
                         self.critic,
                         self.G_optimizer,
@@ -172,49 +222,17 @@ class Individual_FairWAN:
                         lambda_gradient_penalty=tf.constant(
                             lambda_gradient_penalty, dtype=tf.float64
                         ),
-                        train_generator=False,
-                        train_critic=True,
+                        train_generator=train_generator,
+                        train_critic=train_critic,
                         use_gradient_penalty=use_gradient_penalty,
                     )
-
-            # Train Both Networks
-            for batch in batches:
-                input_data = sampler._prepare_inputs(dataset, batch)
-
-                batch_loss = np.array(
-                    [
-                        loss.numpy()
-                        for loss in _train(
-                            self.generator,
-                            self.critic,
-                            self.G_optimizer,
-                            self.C_optimizer,
-                            *input_data,
-                            lambda_wasserstein=tf.constant(
-                                lambda_wasserstein, dtype=tf.float64
-                            ),
-                            lambda_regularization=tf.constant(
-                                lambda_regularization, dtype=tf.float64
-                            ),
-                            lambda_gradient_penalty=tf.constant(
-                                lambda_gradient_penalty, dtype=tf.float64
-                            ),
-                            train_generator=True,
-                            train_critic=True,
-                            use_gradient_penalty=use_gradient_penalty,
-                        )
-                    ]
-                )
-
-                loss_in_epoch += (1 / len(batches)) * batch_loss
-
-            BCE_loss_series, W_loss_series, C_loss_series = _print_and_append_loss(
-                BCE_loss_series, W_loss_series, C_loss_series, loss_in_epoch
+                ]
             )
 
-            print(f"Time for epoch {epoch + 1} is {time.time()-start} sec\n")
+            loss_in_epoch += (1 / len(batches)) * batch_loss
 
-        return BCE_loss_series, W_loss_series, C_loss_series
+        if return_loss:
+            return loss_in_epoch
 
 
 @tf.function(experimental_relax_shapes=True)
